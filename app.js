@@ -1,5 +1,8 @@
 import {Game,typeOf,imageOf,labelOfType,chooseDiscard,chooseClaim} from './engine.js';
+import {HandOrder} from './hand-order.js';
 const $=selector=>document.querySelector(selector);
+const handOrder = new HandOrder((a,b) => typeOf(a)-typeOf(b) || a-b);
+let orderGame = null, orderRound = 0, draggingCard = null, suppressClickUntil = 0;
 let game=new Game(),selected=null,riichiMode=false,hintCard=null,generation=0,aiJob=null,timer=null,requestId=0;
 let worker=null;
 const pending=new Map();
@@ -24,14 +27,87 @@ function cardImage(id,className=''){
 }
 function activeSeat(){return ['humanRon','humanClaim'].includes(game.phase)?0:['aiClaim'].includes(game.phase)?game.pending.seat:game.turn;}
 function windLabel(seat){return ['조커','J','Q','K'][game.position(seat)];}
-function sortedHand(seat){return game.players[seat].hand.slice().sort((a,b)=>typeOf(a)-typeOf(b)||a-b);}
+function displayedHand() {
+  if (orderGame !== game || orderRound !== game.round) {
+    handOrder.reset(game.players[0].hand);
+    orderGame = game;
+    orderRound = game.round;
+  }
+  const freshId = game.turn === 0 && game.phase === 'humanDiscard' ? game.drawn : null;
+  return handOrder.sync(game.players[0].hand, freshId);
+}
+function clearDragMarks() {
+  $('#human-hand').classList.remove('drop-at-end');
+  for (const card of $('#human-hand').querySelectorAll('.hand-card')) {
+    card.classList.remove('dragging', 'drop-before', 'drop-after');
+  }
+}
+function finishHandDrag() {
+  draggingCard = null;
+  suppressClickUntil = performance.now() + 300;
+  clearDragMarks();
+}
+function attachHandDrag(button, id) {
+  let gesture = null;
+  button.draggable = false;
+  button.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    gesture = {pointerId:event.pointerId, x:event.clientX, y:event.clientY, active:false, destination:null};
+    button.setPointerCapture(event.pointerId);
+  });
+  button.addEventListener('pointermove', event => {
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    if (!gesture.active && Math.hypot(event.clientX-gesture.x, event.clientY-gesture.y) < 6) return;
+    gesture.active = true;
+    draggingCard = id;
+    event.preventDefault();
+    clearDragMarks();
+    button.classList.add('dragging');
+    const root = $('#human-hand');
+    const bounds = root.getBoundingClientRect();
+    gesture.destination = null;
+    if (event.clientY < bounds.top-40 || event.clientY > bounds.bottom+40 ||
+        event.clientX < bounds.left-40 || event.clientX > bounds.right+40) return;
+    const others = [...root.querySelectorAll('.hand-card')].filter(card => Number(card.dataset.cardId) !== id);
+    const target = others.find(card => {
+      const rect = card.getBoundingClientRect();
+      return event.clientX < rect.left+rect.width/2;
+    });
+    if (target) {
+      gesture.destination = {id:Number(target.dataset.cardId), before:true};
+      target.classList.add('drop-before');
+    } else {
+      gesture.destination = {end:true};
+      others[others.length-1]?.classList.add('drop-after');
+    }
+  });
+  button.addEventListener('pointerup', event => {
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    const completed = gesture;
+    gesture = null;
+    if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId);
+    if (!completed.active) return;
+    event.preventDefault();
+    if (completed.destination?.end) handOrder.moveToEnd(id);
+    else if (completed.destination) handOrder.move(id, completed.destination.id, completed.destination.before);
+    finishHandDrag();
+    renderHand();
+    renderActions();
+  });
+  const cancel = () => {
+    if (gesture?.active) finishHandDrag();
+    gesture = null;
+  };
+  button.addEventListener('pointercancel', cancel);
+  button.addEventListener('lostpointercapture', cancel);
+}
 function meldNode(meld){const div=document.createElement('div');div.className='meld';for(const id of meld)div.append(cardImage(id));return div;}
 function renderSeats(){
   for(const seat of [1,2,3]){
     const root=$(`#seat-${seat}`),p=game.players[seat];root.classList.toggle('active',activeSeat()===seat&&!game.result);
     root.replaceChildren();
     const name=document.createElement('div');name.className='player-label';name.innerHTML=`<strong>${game.name(seat)}</strong><span class="wind-chip">${windLabel(seat)}</span>${seat===game.dealer?'<span class="dealer-tag">오야</span>':''}${p.riichi?'<span class="riichi-tag">리치</span>':''}`;root.append(name);
-    const backs=document.createElement('div');backs.className='backs';backs.setAttribute('aria-label',`비공개 카드 ${p.hand.length}장`);
+    const backs=document.createElement('div');backs.className='backs';backs.setAttribute('aria-label',`비공개 카드 ${p.hand.length}장`);backs.style.setProperty('--hand-count',p.hand.length);
     p.hand.forEach((_,i)=>{const img=document.createElement('img');img.src='cards/Card-back.png';img.alt='카드 뒷면';img.className='back-card';img.style.setProperty('--i',i);backs.append(img);});root.append(backs);
     if(p.melds.length){const groups=document.createElement('div');groups.className='melds';for(const meld of p.melds)groups.append(meldNode(meld));root.append(groups);}
   }
@@ -46,24 +122,47 @@ function renderRivers(){
     for(const id of game.players[seat].river){const latest=game.lastDiscard?.id===id;cards.append(cardImage(id,latest?'latest':''));}root.append(cards);
   }
 }
-function renderHand(){
-  const root=$('#human-hand'),p=game.players[0],humanTurn=game.phase==='humanDiscard';
-  if(p.riichi&&humanTurn)selected=game.drawn;
-  const eligible=riichiMode?game.riichiDiscards(0):[];
+function renderHand() {
+  const root = $('#human-hand'), player = game.players[0];
+  const humanTurn = game.phase === 'humanDiscard';
+  if (player.riichi && humanTurn) selected = game.drawn;
+  const eligible = riichiMode ? game.riichiDiscards(0) : [];
+  const cards = displayedHand();
   root.replaceChildren();
-  for(const id of sortedHand(0)){
-    const button=document.createElement('button');button.className='hand-card';
-    button.setAttribute('aria-label',`${labelOfType(typeOf(id))}${id===game.drawn&&game.turn===0?' 뽑은 카드':''}`);
-    button.setAttribute('aria-pressed',String(selected===id));
-    button.classList.toggle('selected',selected===id);button.classList.toggle('hint',hintCard===id);button.classList.toggle('ineligible',riichiMode&&!eligible.includes(id));
-    button.classList.toggle('drawn',id===game.drawn&&game.turn===0&&humanTurn);
-    button.disabled=!humanTurn||(p.riichi&&id!==game.drawn)||(riichiMode&&!eligible.includes(id));
+  for (const id of cards) {
+    const button = document.createElement('button');
+    button.className = 'hand-card';
+    button.dataset.cardId = id;
+    const fresh = id === game.drawn && game.turn === 0 && humanTurn;
+    const canSelect = humanTurn && (!player.riichi || id === game.drawn) && (!riichiMode || eligible.includes(id));
+    button.setAttribute('aria-label', `${labelOfType(typeOf(id))}${fresh ? ' 뽑은 카드' : ''}`);
+    button.setAttribute('aria-pressed', String(selected === id));
+    button.setAttribute('aria-disabled', String(!canSelect));
+    button.title = '드래그해서 순서 변경';
+    button.classList.toggle('selected', selected === id);
+    button.classList.toggle('hint', hintCard === id);
+    button.classList.toggle('ineligible', riichiMode && !eligible.includes(id));
+    button.classList.toggle('drawn', fresh && id === cards[cards.length - 1]);
+    button.classList.toggle('fresh-card', fresh);
     button.append(cardImage(id));
-    button.onclick=()=>{selected=id;hintCard=null;renderHand();renderActions();};
-    button.ondblclick=()=>{if(!button.disabled){selected=id;discardSelected();}};
+    button.onclick = () => {
+      if (!canSelect || performance.now() < suppressClickUntil) return;
+      selected = id;
+      hintCard = null;
+      renderHand();
+      renderActions();
+    };
+    button.ondblclick = () => {
+      if (!canSelect || performance.now() < suppressClickUntil) return;
+      selected = id;
+      discardSelected();
+    };
+    attachHandDrag(button, id);
     root.append(button);
   }
+
 }
+
 function action(text,className,handler,disabled=false){const button=document.createElement('button');button.textContent=text;button.className=className;button.onclick=handler;button.disabled=disabled;$('#actions').append(button);return button;}
 function setNotice(message){$('#notice').textContent=message;}
 function renderActions(){

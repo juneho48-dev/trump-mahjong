@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0b171b"><meta name="description" content="실제 트럼프 카드로 AI 세 명과 대결하는 4인용 트럼프 마작.">
-<title>트럼프 마작</title><link rel="stylesheet" href="style.css">
+<title>트럼프 마작</title><link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 <header class="app-header">
@@ -23,7 +23,7 @@
       <div id="river-1" class="river river-right"></div>
       <div id="river-0" class="river river-bottom"></div>
       <div class="table-center"><div id="turn-status" role="status" aria-live="polite"></div><div class="wall-count"><strong id="wall-count">64</strong><span>중앙 카드</span></div><div id="last-discard"></div></div>
-      <div class="human-area"><div id="human-meta" class="human-meta"></div><div id="human-melds" class="human-melds"></div><div id="human-hand" class="human-hand"></div></div>
+      <div class="human-area"><div id="human-meta" class="human-meta"></div><div class="human-row"><div id="human-melds" class="human-melds"></div><div id="human-hand" class="human-hand"></div></div></div>
     </div>
     <div class="action-bar"><div id="action-message" class="action-message" aria-live="polite"></div><div id="actions" class="actions"></div></div>
     <div id="notice" class="notice" role="status"></div>
@@ -48,9 +48,9 @@
 <p>도라 네 장은 처음부터 공개합니다. 화료 카드 전체에서 같은 색·숫자의 카드 한 장마다 30점을 가산합니다. 동일한 도라가 두 장이면 카드 한 장당 60점, 세 장이면 90점입니다. 조커도 같은 방식입니다.</p>
 <p>론은 방총자가 전액 냅니다. 화료자 또는 방총자가 오야이면 2배입니다. 쯔모는 각자 화료 점수의 1/3을 부담하며, 오야가 내거나 받는 몫은 2배입니다. 예를 들어 자의 90점 쯔모는 자 두 명이 30점씩, 오야가 60점을 내 총 120점입니다.</p>
 <h3>이 버전에 적용한 세부 규칙</h3><p>론·퐁·치 순으로 처리합니다. 여러 퐁은 버린 사람부터 반시계 방향으로 가까운 사람이 우선합니다. 후리텐과 깡은 적용하지 않습니다. 마지막 버림패에는 론만 가능합니다. 중앙 카드가 소진되는 유국은 점수 이동 없이 마칩니다.</p>
-<p>AI는 자기 카드와 공개 정보로 판단합니다. <b>추천</b> 버튼으로 같은 AI의 버림패 제안을 볼 수 있습니다. 카드 선택 후 <b>버리기</b>를 누르거나 카드를 두 번 클릭하세요.</p>
+<p>AI는 자기 카드와 공개 정보로 판단합니다. <b>추천</b> 버튼으로 같은 AI의 버림패 제안을 볼 수 있습니다. 방금 뽑은 카드는 손패 맨 오른쪽에 표시됩니다. 카드를 드래그해 원하는 순서로 정리할 수 있고, 정리한 순서는 다음 차례에도 유지됩니다. 뽑은 카드도 직접 드래그해 손패 사이에 넣을 수 있습니다. 카드 선택 후 <b>버리기</b>를 누르세요.</p>
 </div></dialog>
 <dialog id="result-dialog"><div id="result-content"></div></dialog>
 <dialog id="new-dialog"><div class="dialog-head"><h2>새 게임을 시작할까요?</h2></div><p>현재 진행 상황과 누적 점수가 초기화됩니다.</p><div class="dialog-buttons"><button class="quiet-button" id="cancel-new">계속 플레이</button><button class="primary-button" id="confirm-new">새 게임 시작</button></div></dialog>
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=2"></script>
 </body></html>
