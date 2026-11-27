@@ -235,7 +235,8 @@ export function chooseClaim(view,offered,options) {
 }
 
 export class Game {
-  constructor(seed=null) {
+  constructor(seed=null, {humanSeats=[0]} = {}) {
+    this.humanSeats=new Set(humanSeats);
     this.random=seed===null ? Math.random : (()=>{let s=seed>>>0;return ()=>{s+=0x6D2B79F5;let t=s;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return((t^(t>>>14))>>>0)/4294967296;};})();
     this.dealer=Math.floor(this.random()*4);this.round=1;this.rounds=4;this.scores=[0,0,0,0];this.log=[];this.startRound();
   }
@@ -248,7 +249,7 @@ export class Game {
     for(let i=deck.length-1;i>0;i--){const j=Math.floor(this.random()*(i+1));[deck[i],deck[j]]=[deck[j],deck[i]];}
     this.dora=deck.splice(0,4);this.players=Array.from({length:4},()=>({hand:[],melds:[],river:[],riichi:false}));
     for(let i=0;i<10;i++)for(let s=0;s<4;s++)this.players[s].hand.push(deck.shift());
-    this.wall=deck;this.turn=this.dealer;this.phase='draw';this.drawn=null;this.offer=null;this.result=null;this.lastDiscard=null;
+    this.wall=deck;this.turn=this.dealer;this.phase='draw';this.drawn=null;this.offer=null;this.result=null;this.lastDiscard=null;this.pendingRon=[];this.acceptedRon=[];
     this.addLog(`${this.round}세트 시작 · ${this.name(this.dealer)} 오야`);this.assertCards();
   }
   observation(seat){
@@ -260,8 +261,8 @@ export class Game {
     if(this.phase!=='draw')throw Error('뽑기 순서가 아닙니다.');
     if(!this.wall.length){this.finishDraw();return;}
     this.drawn=this.wall.pop();this.players[this.turn].hand.push(this.drawn);
-    if(this.turn!==0&&this.canWin(this.turn)){this.finish([this.turn],null);return;}
-    this.phase=this.turn===0?'humanDiscard':'aiDiscard';this.assertCards();
+    if(!this.humanSeats.has(this.turn)&&this.canWin(this.turn)){this.finish([this.turn],null);return;}
+    this.phase=this.humanSeats.has(this.turn)?'humanDiscard':'aiDiscard';this.assertCards();
   }
   riichiDiscards(seat=0){
     const p=this.players[seat];if(p.riichi||p.melds.length)return [];
@@ -277,7 +278,9 @@ export class Game {
     this.addLog(`${this.name(this.turn)} · ${labelOfType(typeOf(id))} 버림`);
     const seats=[];for(let offset=1;offset<4;offset++){const seat=(this.turn+offset)%4;if(this.canWin(seat,id))seats.push(seat);}
     this.offer={from:this.turn,id,ronSeats:seats};
-    if(seats.includes(0))this.phase='humanRon';else if(seats.length)this.finish(seats,this.turn);else this.beginClaims();
+    this.pendingRon=seats.filter(seat=>this.humanSeats.has(seat));
+    this.acceptedRon=seats.filter(seat=>!this.humanSeats.has(seat));
+    if(this.pendingRon.length)this.phase='humanRon';else if(seats.length)this.finish(seats,this.turn);else this.beginClaims();
     this.assertCards();
   }
   aiDiscard(choice){
@@ -286,12 +289,16 @@ export class Game {
     const declare=!p.riichi&&!p.melds.length&&this.riichiDiscards(this.turn).includes(id);
     this.discard(id,declare);
   }
-  humanRon(accept){
-    if(this.phase!=='humanRon')return;
-    const winners=this.offer.ronSeats.filter(s=>s!==0||accept);
+  humanRon(accept,seat=0){
+    if(this.phase!=='humanRon'||!this.pendingRon.includes(seat))return;
+    this.pendingRon=this.pendingRon.filter(player=>player!==seat);
+    if(accept)this.acceptedRon.push(seat);
+    if(this.pendingRon.length)return;
+    const winners=this.offer.ronSeats.filter(player=>this.acceptedRon.includes(player));
     if(winners.length)this.finish(winners,this.offer.from);else this.beginClaims();
   }
-  humanTsumo(){if(this.phase!=='humanDiscard'||this.turn!==0||!this.canWin(0))return;this.finish([0],null);}
+  humanTsumo(seat=0){if(this.phase!=='humanDiscard'||this.turn!==seat||!this.canWin(seat))return;this.finish([seat],null);}
+
   beginClaims(){
     this.callQueue=[];this.callIndex=0;
     if(this.wall.length) for(const chi of [false,true])for(let offset=1;offset<4;offset++){
@@ -304,7 +311,7 @@ export class Game {
   }
   nextClaim(){
     if(this.callIndex>=this.callQueue.length){this.turn=(this.offer.from+1)%4;this.phase='draw';return;}
-    this.pending=this.callQueue[this.callIndex++];this.phase=this.pending.seat===0?'humanClaim':'aiClaim';
+    this.pending=this.callQueue[this.callIndex++];this.phase=this.humanSeats.has(this.pending.seat)?'humanClaim':'aiClaim';
   }
   resolveClaim(meld){
     if(!['humanClaim','aiClaim'].includes(this.phase))return;
@@ -314,7 +321,7 @@ export class Game {
     if(this.players[this.offer.from].river.pop()!==id)throw Error('버림패 상태가 일치하지 않습니다.');
     p.hand.push(id);const physical=[];
     for(const t of meld){const at=p.hand.findIndex(card=>typeOf(card)===t);if(at<0)throw Error('몸통 카드가 부족합니다.');physical.push(p.hand.splice(at,1)[0]);}
-    p.melds.push(physical);this.turn=seat;this.drawn=null;this.phase=seat===0?'humanDiscard':'aiDiscard';
+    p.melds.push(physical);this.turn=seat;this.drawn=null;this.phase=this.humanSeats.has(seat)?'humanDiscard':'aiDiscard';
     this.addLog(`${this.name(seat)} ${chi?'치':'퐁'} · ${meld.map(labelOfType).join(' ')}`);this.assertCards();
   }
   finish(winners,discarder){

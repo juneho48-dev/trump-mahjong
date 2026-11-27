@@ -1,4 +1,4 @@
-import {chooseDiscard,chooseClaim} from './engine.js';
+import {chooseDiscard,chooseClaim} from './engine.js?v=3';
 self.onmessage=({data})=>{
   try {
     const result=data.kind==='claim'?chooseClaim(data.view,data.offered,data.options):chooseDiscard(data.view);

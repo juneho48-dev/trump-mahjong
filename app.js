@@ -1,9 +1,11 @@
-import {Game,typeOf,imageOf,labelOfType,chooseDiscard,chooseClaim} from './engine.js';
+import {Game,typeOf,imageOf,labelOfType,chooseDiscard,chooseClaim} from './engine.js?v=3';
+import {P2PSession} from './p2p-session.js?v=3';
 import {HandOrder} from './hand-order.js';
 const $=selector=>document.querySelector(selector);
 const handOrder = new HandOrder((a,b) => typeOf(a)-typeOf(b) || a-b);
 let orderGame = null, orderRound = 0, draggingCard = null, suppressClickUntil = 0;
 let game=new Game(),selected=null,riichiMode=false,hintCard=null,generation=0,aiJob=null,timer=null,requestId=0;
+let onlineSession=null,shownOnlineResult='',onlineRevision='';
 let worker=null;
 const pending=new Map();
 try{
@@ -134,7 +136,7 @@ function renderHand() {
     button.className = 'hand-card';
     button.dataset.cardId = id;
     const fresh = id === game.drawn && game.turn === 0 && humanTurn;
-    const canSelect = humanTurn && (!player.riichi || id === game.drawn) && (!riichiMode || eligible.includes(id));
+    const canSelect = humanTurn && (!onlineSession||!!onlineSession.view) && !onlineSession?.busy && !onlineSession?.view?.snapshot.paused && (!player.riichi || id === game.drawn) && (!riichiMode || eligible.includes(id));
     button.setAttribute('aria-label', `${labelOfType(typeOf(id))}${fresh ? ' 뽑은 카드' : ''}`);
     button.setAttribute('aria-pressed', String(selected === id));
     button.setAttribute('aria-disabled', String(!canSelect));
@@ -167,6 +169,10 @@ function action(text,className,handler,disabled=false){const button=document.cre
 function setNotice(message){$('#notice').textContent=message;}
 function renderActions(){
   $('#actions').replaceChildren();const message=$('#action-message'),p=game.players[0];
+  if(onlineSession&&!onlineSession.view){message.textContent='온라인 대기실에서 게임 시작을 기다리고 있습니다.';action('대기실 보기','secondary-button',openOnline);return;}
+  if(onlineSession?.view?.snapshot.paused){message.textContent='참가자가 재접속할 때까지 기다리고 있습니다.';action('연결 상태 보기','secondary-button',openOnline);return;}
+  if(onlineSession?.busy){message.textContent='방장 응답을 기다리고 있습니다.';return;}
+  if(game.phase==='remoteResponse'){message.textContent='다른 플레이어의 응답을 기다리고 있습니다.';return;}
   if(game.phase==='humanDiscard'){
     message.innerHTML=riichiMode?'리치 후 기다릴 카드를 정하려면<br><strong>강조된 카드 중 한 장을 선택하세요.</strong>':p.riichi?'리치 상태입니다.<br>뽑은 패를 버리거나 쯔모하세요.':selected!==null?`<strong>${labelOfType(typeOf(selected))}</strong> 선택됨`:'내 차례입니다.<br>버릴 카드를 선택하세요.';
     if(game.canWin(0))action('쯔모','primary-button',()=>run(()=>game.humanTsumo()));
@@ -215,6 +221,7 @@ async function hint(){
 }
 function pump(){
   clearTimeout(timer);render();
+  if(onlineSession){const key=game.result?`${game.snapshot.epoch}:${game.round}`:'';if(key&&key!==shownOnlineResult){shownOnlineResult=key;showResult();}return;}
   if(game.result){showResult();return;}
   if(game.phase==='draw'){
     const current=generation;
@@ -248,11 +255,66 @@ function showResult(){
     const details=document.createElement('p');details.className='winner-detail';details.textContent=`화료 점수 ${winner.score}점 · 도라 가산 ${winner.bonus}개 · ${winner.closed?'멘젠 1.5배':'치·퐁 사용'}${winner.riichi?' · 리치 +30점':''}`;section.append(details);root.append(section);
   }
   const scores=document.createElement('div');scores.className='result-scores';scores.innerHTML=[0,1,2,3].map(seat=>`<div><span>${game.name(seat)}</span><strong class="${delta[seat]>0?'positive':delta[seat]<0?'negative':''}">${delta[seat]>0?'+':''}${delta[seat]}</strong><span>누적 ${game.scores[seat]}</span></div>`).join('');root.append(scores);
-  const buttons=document.createElement('div');buttons.className='dialog-buttons';const button=document.createElement('button');button.className='primary-button';button.textContent=game.phase==='matchEnd'?'새 게임 시작':'다음 세트';button.onclick=()=>{$('#result-dialog').close();if(game.phase==='matchEnd')newGame();else run(()=>game.nextRound());};buttons.append(button);root.append(buttons);$('#result-dialog').showModal();
+  const buttons=document.createElement('div');buttons.className='dialog-buttons';const button=document.createElement('button');button.className='primary-button';button.textContent=game.phase==='matchEnd'?'새 게임 시작':'다음 세트';button.onclick=()=>{$('#result-dialog').close();if(game.phase==='matchEnd')newGame();else run(()=>game.nextRound());};if(onlineSession?.role==='guest'){button.disabled=true;button.textContent='방장의 다음 세트를 기다리는 중';}buttons.append(button);const close=document.createElement('button');close.className='quiet-button';close.textContent='테이블 보기';close.onclick=()=>$('#result-dialog').close();buttons.prepend(close);root.append(buttons);$('#result-dialog').showModal();
 }
-function newGame(){generation++;clearTimeout(timer);aiJob=null;game=new Game();resetSelection();pump();}
+function newGame(){if(onlineSession){onlineSession.act({type:'restart'});return;}generation++;clearTimeout(timer);aiJob=null;game=new Game();resetSelection();pump();}
 $('#rules-button').onclick=()=>$('#rules-dialog').showModal();$('#close-rules').onclick=()=>$('#rules-dialog').close();
 $('#dora-help').onclick=()=>{$('#rules-dialog').showModal();$('#rules-dialog h3:nth-of-type(5)')?.scrollIntoView();};
 $('#new-button').onclick=()=>$('#new-dialog').showModal();$('#cancel-new').onclick=()=>$('#new-dialog').close();$('#confirm-new').onclick=()=>{$('#new-dialog').close();if($('#result-dialog').open)$('#result-dialog').close();newGame();};
 document.addEventListener('keydown',event=>{if(event.key==='Enter'&&!document.querySelector('dialog[open]')&&game.phase==='humanDiscard'&&selected!==null&&event.target===document.body)discardSelected();});
+// Online room controls keep the original offline table and hand ordering intact.
+function openOnline(){renderOnline();if(!$('#online-dialog').open)$('#online-dialog').showModal();}
+function renderOnline(){
+  const session=onlineSession,joined=!!session;
+  $('#online-entry').hidden=joined;$('#online-room').hidden=!joined;
+  $('#online-message').textContent=session?.message||'방을 만들고 친구에게 코드를 보내세요. 계정 없이 최대 4명이 참가할 수 있습니다.';
+  $('#online-button').textContent=joined?'온라인 · 방 정보':'온라인 대전';
+  $('#mode-label').textContent=joined?'친구와 P2P 대전':'나와 세 명의 AI';
+  $('#new-button').disabled=joined&&session.role!=='host';
+  $('#network-bar').hidden=!joined;
+  if(!joined)return;
+  $('#network-status').textContent=`방 ${session.code} · ${session.role==='host'?'방장':'참가자'}${session.view?.snapshot.paused?' · 재접속 대기':''}`;
+  $('#room-code').textContent=session.code;
+  $('#room-members').replaceChildren(...session.roster.map((member,seat)=>{
+    const row=document.createElement('div');row.className='room-member';
+    const label=document.createElement('span');label.textContent=`${seat+1}번 · ${seat===0?'방장':member.kind==='human'?'플레이어 '+(seat+1):'AI'}${member.kind==='human'?(member.connected?' · 연결됨':' · 연결 끊김'):''}${seat===session.seat?' (나)':''}`;row.append(label);
+    if(session.role==='host'&&session.match&&seat>0&&member.kind==='human'&&!member.connected){const b=document.createElement('button');b.className='quiet-button';b.textContent='AI로 이어하기';b.onclick=()=>{try{session.replace(seat);}catch(e){session.emit(e.message);}};row.append(b);}return row;
+  }));
+  $('#start-online').hidden=session.role!=='host'||!!session.match;
+  $('#start-online').disabled=!session.ready||session.peer.disconnected;
+  $('#retry-online').hidden=session.role!=='guest'||!!session.connection?.open||session.closed;
+  $('#lobby-note').textContent=session.view?'방장 탭을 계속 열어 두세요. 연결이 끊기면 게임이 멈춥니다.':'빈자리는 AI가 맡습니다. 친구가 모두 참가한 뒤 방장이 시작하세요.';
+}
+function sessionChanged(session){
+  if(session!==onlineSession)return;
+  renderOnline();
+  if(session.view){
+    generation++;clearTimeout(timer);aiJob=null;
+    const firstOnline=game!==session.view;
+    const nextRevision=`${session.view.snapshot.epoch}:${session.view.snapshot.revision}`;
+    game=session.view;
+    if(!game.result&&$('#result-dialog').open)$('#result-dialog').close();
+    if(nextRevision!==onlineRevision){if(!onlineRevision.startsWith(session.view.snapshot.epoch+':'))orderGame=null;onlineRevision=nextRevision;resetSelection();}
+    if(firstOnline&&$('#online-dialog').open)$('#online-dialog').close();
+    pump();
+  }
+  setNotice(session.message);
+}
+function beginOnline(role){
+  if(onlineSession)return;
+  generation++;clearTimeout(timer);aiJob=null;const session=new P2PSession(sessionChanged);onlineSession=session;
+  try{if(role==='host')session.host();else session.join($('#join-code').value);renderOnline();}
+  catch(error){session.close();onlineSession=null;renderOnline();$('#online-message').textContent=error.message;}
+}
+$('#online-button').onclick=openOnline;$('#room-info-button').onclick=openOnline;
+$('#close-online').onclick=()=>$('#online-dialog').close();
+$('#create-room').onclick=()=>beginOnline('host');$('#join-room').onclick=()=>beginOnline('guest');
+$('#join-code').addEventListener('keydown',e=>{if(e.key==='Enter')beginOnline('guest');});
+$('#start-online').onclick=()=>{try{onlineSession.start();$('#online-dialog').close();}catch(error){onlineSession.emit(error.message);}};
+$('#retry-online').onclick=()=>onlineSession?.reconnect();
+$('#leave-online').onclick=()=>{onlineSession?.close();onlineSession=null;shownOnlineResult='';$('#result-dialog').close();renderOnline();newGame();};
+$('#copy-room').onclick=async()=>{const url=new URL(location.href);url.hash='room='+onlineSession.code;try{await navigator.clipboard.writeText(url.href);onlineSession.emit('초대 링크를 복사했습니다. 친구에게 보내세요.');}catch{onlineSession.emit('복사가 지원되지 않습니다. 위의 방 코드를 직접 보내세요.');}};
+setInterval(()=>{const snapshot=onlineSession?.view?.snapshot;$('#call-countdown').textContent=snapshot?.deadline&&!snapshot.paused?`응답 남은 시간 ${Math.max(0,Math.ceil((snapshot.deadline-Date.now())/1000))}초`:'';},250);
+window.addEventListener('beforeunload',event=>{if(onlineSession?.view&&!game.result){event.preventDefault();event.returnValue='';}});
+const invited=new URLSearchParams(location.hash.slice(1)).get('room');if(invited){$('#join-code').value=invited;openOnline();}
 pump();
